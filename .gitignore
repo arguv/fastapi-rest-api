@@ -4,6 +4,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.hypothesis/
+.tox/
+.nox/
 
 # Virtual environments
 .venv/
@@ -25,6 +28,10 @@ dist/
 .coverage.*
 htmlcov/
 coverage.xml
+*.prof
+
+# Local logs
+*.log
 
 # IDE and operating system files
 .idea/
