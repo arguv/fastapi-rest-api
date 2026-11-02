@@ -871,11 +871,11 @@ fastapi-rest-api/
 - [x] Nine passing automated tests.
 - [x] Alembic initial and priority migrations.
 - [x] Fresh-database migration verification through `cc7cf3a88d42 (head)`.
-- [ ] Step 10: Dockerize the FastAPI application itself.
+- [x] Step 10: Dockerize the FastAPI application itself.
 
-## Step 10 — Upcoming, not yet implemented
+## Step 10 — Dockerize the FastAPI application
 
-The next goal is to run **both FastAPI and PostgreSQL as Docker Compose services**. This will likely involve:
+The goal is to run **both FastAPI and PostgreSQL as Docker Compose services**. This involves:
 
 1. A `Dockerfile` for the Python application.
 2. A reproducible dependency list (`requirements.txt` or equivalent).
@@ -884,11 +884,10 @@ The next goal is to run **both FastAPI and PostgreSQL as Docker Compose services
 5. Startup coordination and migration strategy.
 6. Verification of HTTP requests, tests, logs, and persistent data.
 
-We have **not** completed these tasks yet; do not treat the current Compose file as a fully Dockerized FastAPI deployment.
+The completed Docker and integration validation is documented in Steps 10.6 and 10.7 below.
 
 ## Further engineering improvements (not yet done)
 
-- Move credentials to environment variables/secrets; never commit production secrets.
 - Add `title` length and non-empty validation in Pydantic, not just database length limits.
 - Add a database-level CHECK constraint or PostgreSQL enum for allowed priority values.
 - Add tests for PUT, DELETE, database failures, and transaction rollback behavior.
@@ -899,4 +898,207 @@ We have **not** completed these tasks yet; do not treat the current Compose file
 
 ---
 
-**Learning checkpoint:** We understand the path from HTTP request → FastAPI → Pydantic → SQLAlchemy → PostgreSQL, how to test it with pytest, and how Alembic manages reproducible database schema changes. Step 10 is the next lesson; advance only after explicitly requesting it.
+**Learning checkpoint:** We understand the path from HTTP request → FastAPI → Pydantic → SQLAlchemy → PostgreSQL, how to test it with pytest, how Alembic manages reproducible schema changes, and how Docker Compose connects the API and database services.
+
+## Step 10.6 — Build and Run FastAPI + PostgreSQL in Docker
+
+### Goal
+
+Run FastAPI and PostgreSQL as separate Docker containers using Docker Compose.
+
+### Docker architecture
+
+```text
+Ubuntu / Browser
+    |
+    | localhost:8000
+    v
+FastAPI Container (api)
+    |
+    | db:5432
+    v
+PostgreSQL Container (db)
+    |
+    v
+Persistent Docker Volume (postgres_data)
+```
+
+### Important concepts
+
+**Docker image vs. container**
+
+- Image: A packaged application containing Python, dependencies, and source code.
+- Container: A running instance of an image.
+
+**Docker Compose**
+
+Docker Compose manages multiple related containers using one YAML configuration file. This application has two services:
+
+- `api`: FastAPI application.
+- `db`: PostgreSQL database.
+
+**Docker networking**
+
+Inside the FastAPI container, `localhost` refers to the FastAPI container itself, not PostgreSQL. Docker Compose provides internal DNS, allowing services to communicate using service names:
+
+- Local Ubuntu → PostgreSQL: `localhost:5432`
+- FastAPI container → PostgreSQL: `db:5432`
+
+**Environment variables**
+
+`DATABASE_URL` configures the database connection without changing Python source code between environments. Docker Compose passes this variable into the FastAPI container.
+
+### Commands
+
+```bash
+# Build FastAPI image
+docker compose build api
+
+# Start services in the background
+docker compose up -d
+
+# Check container status
+docker compose ps
+
+# Check API health
+curl -i http://localhost:8000/health
+
+# Check the database connection from the FastAPI container
+docker compose exec api python -c "from database import check_database_connection; print(check_database_connection())"
+```
+
+Expected database connection:
+
+```text
+('task_manager', 'task_user')
+```
+
+### Troubleshooting: connection refused
+
+If the API reports:
+
+```text
+connection to server at "127.0.0.1", port 5432 failed
+```
+
+the FastAPI container is using `localhost` because `DATABASE_URL` was not passed into the container. Add the database URL to the `api` service in `compose.yaml`:
+
+```yaml
+environment:
+  DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}"
+```
+
+Then recreate the API container:
+
+```bash
+docker compose up -d --force-recreate api
+```
+
+This applies the updated configuration without deleting PostgreSQL data.
+
+## Step 10.7 — Final Integration Testing
+
+### Goal
+
+Verify the complete application, including database migrations, CRUD operations, persistence, and automated tests.
+
+### 1. Alembic migrations
+
+Alembic manages database schema versions:
+
+```bash
+docker compose exec api alembic current
+```
+
+Expected result:
+
+```text
+cc7cf3a88d42 (head)
+```
+
+`head` indicates that the database is at the latest migration revision.
+
+### 2. CRUD operations
+
+CRUD stands for:
+
+- **Create** — POST `/tasks`
+- **Read** — GET `/tasks` and GET `/tasks/{id}`
+- **Update** — PUT `/tasks/{id}`
+- **Delete** — DELETE `/tasks/{id}`
+
+The verified operations were:
+
+| Operation | HTTP status | Meaning |
+| --- | ---: | --- |
+| GET `/tasks` | 200 | Tasks retrieved |
+| POST `/tasks` | 201 | Task created |
+| GET `/tasks/3` | 200 | Task retrieved |
+| PUT `/tasks/3` | 200 | Task updated |
+| DELETE `/tasks/3` | 204 | Task deleted |
+| GET `/tasks/3` after deletion | 404 | Task not found |
+
+These tests confirmed that FastAPI can perform database operations through SQLAlchemy.
+
+### 3. Database persistence
+
+PostgreSQL uses the Docker named volume `postgres_data`. Restart PostgreSQL and check the containers:
+
+```bash
+docker compose restart db
+docker compose ps
+curl -i http://localhost:8000/tasks
+```
+
+Existing tasks remain available because they are stored in the persistent Docker volume.
+
+Important distinction:
+
+- `docker compose restart db` restarts the container.
+- `docker compose down` removes containers but preserves named volumes by default.
+- `docker compose down -v` also removes named volumes and can delete database data.
+
+### 4. Automated testing
+
+The test suite was run with:
+
+```bash
+python -m pytest -v
+```
+
+Result:
+
+```text
+9 passed, 1 warning in 1.12s
+```
+
+The nine tests covered health checks, task creation, listing, retrieval, missing tasks, and priority validation. They ran in the local Python environment against a separate test database. The warning was a Starlette dependency deprecation warning, not a failed test.
+
+### 5. Reliability lesson
+
+Immediately after restarting PostgreSQL, one API request returned HTTP 500 and a later request succeeded. One possible explanation is that SQLAlchemy attempted to reuse a database connection invalidated by the PostgreSQL restart. This was not confirmed because application logs were not inspected.
+
+A possible reliability improvement is:
+
+```python
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+)
+```
+
+`pool_pre_ping=True` checks pooled connections before reuse and can replace connections that have become invalid. It does not guarantee that every request succeeds during a database outage.
+
+### Final outcome
+
+The Dockerized FastAPI Task Management REST API was built and tested using:
+
+- Python and FastAPI
+- Pydantic
+- SQLAlchemy
+- PostgreSQL
+- Alembic migrations
+- Docker and Docker Compose
+- pytest
+
+**Key takeaway:** The same application can run locally and inside Docker using environment-based configuration, while PostgreSQL stores data persistently across container restarts.

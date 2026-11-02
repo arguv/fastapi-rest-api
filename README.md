@@ -10,24 +10,13 @@ A FastAPI service for creating and managing tasks. Tasks are persisted in Postgr
 
 ## Setup
 
-Create and activate a virtual environment, then install the dependencies:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-
-On Windows, activate the environment with `.venv\\Scripts\\activate`.
-
-Start PostgreSQL with Docker Compose:
+Copy the environment template and set a strong local database password:
 
 ```bash
 cp .env.example .env
-docker compose up -d db
 ```
 
-Edit `.env` before starting the database and use a strong local password. The database is available on `localhost:5432` with the configured credentials:
+The database is available on `localhost:5432` with the credentials configured in `.env`:
 
 | Setting | Value |
 | --- | --- |
@@ -35,27 +24,110 @@ Edit `.env` before starting the database and use a strong local password. The da
 | User | `task_user` |
 | Password | The value configured in `.env` |
 
-Apply the schema migrations:
+## Run the full stack with Docker
+
+Build the FastAPI image and start both the API and PostgreSQL containers:
 
 ```bash
-alembic upgrade head
-```
-
-## Run the API
-
-```bash
-uvicorn main:app --reload
+docker compose config
+docker compose build api
+docker compose up -d
 ```
 
 The API is available at `http://127.0.0.1:8000`. Interactive documentation is available at `http://127.0.0.1:8000/docs`.
 
-To stop PostgreSQL:
+Apply the schema migrations inside the API container:
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+Check the services and API health:
+
+```bash
+docker compose ps
+curl -i http://127.0.0.1:8000/health
+```
+
+Check the database connection from the API container:
+
+```bash
+docker compose exec api python -c "from database import check_database_connection; print(check_database_connection())"
+```
+
+Open a PostgreSQL shell from the database container:
+
+```bash
+docker compose exec db psql -U task_user -d task_manager
+```
+
+Restart one service without removing containers or volumes:
+
+```bash
+docker compose restart api
+docker compose restart db
+```
+
+Expected output:
+
+```text
+('task_manager', 'task_user')
+```
+
+After changing application code or dependencies, rebuild and recreate the API container:
+
+```bash
+docker compose up -d --build --force-recreate api
+```
+
+View container logs or open a shell inside the API container:
+
+```bash
+docker compose logs -f api
+docker compose logs -f db
+docker compose exec api sh
+```
+
+To stop the stack while preserving the PostgreSQL volume:
+
+```bash
+docker compose stop
+```
+
+To remove the containers and network while preserving database data:
 
 ```bash
 docker compose down
 ```
 
-Use `docker compose down -v` when the local database volume should also be removed.
+To remove the containers and permanently delete the named PostgreSQL volume and its data:
+
+```bash
+docker compose down -v
+```
+
+## Run the API locally
+
+For local FastAPI development, start only PostgreSQL:
+
+```bash
+docker compose up -d db
+```
+
+Then create a virtual environment and install the dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+On Windows, activate the environment with `.venv\\Scripts\\activate`. Apply migrations and run the API from the project directory:
+
+```bash
+alembic upgrade head
+uvicorn main:app --reload
+```
 
 ## API endpoints
 
@@ -86,13 +158,21 @@ Create a new migration after changing the SQLAlchemy models:
 alembic revision --autogenerate -m "describe the change"
 ```
 
-Apply pending migrations with `alembic upgrade head` and roll back one migration with:
+When running the API locally, apply pending migrations with `alembic upgrade head` and roll back one migration with:
 
 ```bash
 alembic downgrade -1
 ```
 
-The application uses the connection configured through the environment variables in `.env`. Alembic can be pointed at another database with the `ALEMBIC_DATABASE_URL` environment variable.
+When running in Docker, use the same commands through the API container:
+
+```bash
+docker compose exec api alembic current
+docker compose exec api alembic upgrade head
+docker compose exec api alembic downgrade -1
+```
+
+The application uses `DATABASE_URL` inside Docker and the variables in `.env` locally. Alembic can be pointed at another database with the `ALEMBIC_DATABASE_URL` environment variable.
 
 ## Running tests
 
