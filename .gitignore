@@ -1,6 +1,7 @@
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
+*.pyo
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -17,6 +18,13 @@ env/
 .env
 .env.*
 !.env.example
+
+# Local database files and dumps
+*.db
+*.sqlite
+*.sqlite3
+*.sql.gz
+postgres_data/
 
 # Build and packaging output
 build/
